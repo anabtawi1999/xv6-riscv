@@ -6,6 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 
+//task1
+#define INIT_PID 1
+#define SHELL_PID 2
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -14,6 +18,9 @@ struct proc *initproc;
 
 int nextpid = 1;
 struct spinlock pid_lock;
+
+//task1
+int pause_time = 0;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -447,7 +454,7 @@ scheduler(void)
 
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
+      if(p->state == RUNNABLE && (ticks >= pause_time || p->pid == INIT_PID || p->pid == SHELL_PID)) { //task1
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
@@ -653,4 +660,37 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+//task 1
+int 
+kill_system(void)
+{
+  struct proc *currP = myproc();
+  acquire(&currP->lock);
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->pid != currP->pid && p->pid != INIT_PID && p->pid != SHELL_PID){
+      //or simply call kill system call on the process
+      acquire(&p->lock);
+      p->killed = 1;
+      if(p->state == SLEEPING){
+        p->state = RUNNABLE;
+      }
+      release(&p->lock);
+    }
+  }
+  currP->killed = 1;
+  release(&currP->lock);
+  return 0;
+}
+
+
+int
+pause_system(int seconds)
+{
+  pause_time = ticks + seconds*10;  
+  yield();
+  return 0;
 }

@@ -23,6 +23,9 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+//task 1
+int pause_system(int seconds);
+int kill_system(void);
 
 // ulib.c
 int stat(const char*, struct stat*);
