@@ -276,6 +276,7 @@ growproc(int n)
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
+// NEW -> READY
 int
 fork(void)
 {
@@ -300,6 +301,7 @@ fork(void)
   *(np->trapframe) = *(p->trapframe);
 
   // Cause fork to return 0 in the child.
+  // a0 is responsible on the return value from the system call
   np->trapframe->a0 = 0;
 
   // increment reference counts on open file descriptors.
@@ -551,7 +553,7 @@ sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
-  sched();
+  sched();// returns only after the scheduler chooses him again that's why we acquire the lk again 
 
   // Tidy up.
   p->chan = 0;
