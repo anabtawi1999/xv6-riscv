@@ -24,7 +24,7 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 //task 1
-int pause_system(int seconds);
+int pause_system(int);
 int kill_system(void);
 
 // ulib.c

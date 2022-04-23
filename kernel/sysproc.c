@@ -85,17 +85,18 @@ sys_kill(void)
 
 //task1
 uint64
-sys_kill_system(void)
+sys_pause_system(void)
 {
-  return kill_system();
+  int seconds;
+  if(argint(0, &seconds) < 0)
+    return -1;
+  return pause_system(seconds);
 }
 
 uint64
-sys_pause_system(void)
+sys_kill_system(void)
 {
-  int n;
-  argint(0, &n);
-  return pause_system(n);
+  return kill_system();
 }
 
 // return how many clock tick interrupts have occurred

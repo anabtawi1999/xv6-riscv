@@ -20,7 +20,8 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 //task1
-int pause_time = 0;
+uint ticksTimeout = 0;
+uint rate = 5;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -32,6 +33,13 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+
+void
+makeRunnable(struct proc *p) {
+  p->last_runnable_time = ticks;
+  p->state = RUNNABLE;
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -126,6 +134,9 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->mean_ticks = 0;
+  p->last_ticks = 0;
+  p->last_runnable_time = ticks;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -249,7 +260,7 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  p->state = RUNNABLE;
+  makeRunnable(p);
 
   release(&p->lock);
 }
@@ -321,7 +332,7 @@ fork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
+  makeRunnable(np);
   release(&np->lock);
 
   return pid;
@@ -436,6 +447,24 @@ wait(uint64 addr)
   }
 }
 
+
+int isShellOrInitProcess(struct proc *p) {
+  return (p->pid == 1 || p->pid == 2);
+}
+
+int
+isSystemPaused()
+{
+  int paused = ticks <= ticksTimeout;
+  return paused;
+}
+
+int
+shouldProcRun(struct proc *p)
+{
+  return (p->state == RUNNABLE && (isShellOrInitProcess(p) || !isSystemPaused()));
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -444,7 +473,7 @@ wait(uint64 addr)
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 void
-scheduler(void)
+defaultScheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
@@ -456,7 +485,7 @@ scheduler(void)
 
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if(p->state == RUNNABLE && (ticks >= pause_time || p->pid == INIT_PID || p->pid == SHELL_PID)) { //task1
+      if(shouldProcRun(p)) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
@@ -471,6 +500,123 @@ scheduler(void)
       release(&p->lock);
     }
   }
+}
+
+struct proc * findShortestProc() {
+  struct proc *p;
+  struct proc *shortestProc = 0;
+  int shortestTime = __INT32_MAX__;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->mean_ticks < shortestTime && shouldProcRun(p)) {
+      shortestTime = p->mean_ticks;
+      shortestProc = p;
+    }
+    release(&p->lock);
+  }
+  return shortestProc;
+}
+
+// shortest job first scheduling
+void
+sjfScheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+
+  c->proc = 0;
+  for(;;) {
+    intr_on();
+
+    p = findShortestProc();
+    if(p) {
+      acquire(&p->lock);
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      uint ticksBeforeBurst = ticks;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+
+      p->last_ticks = ticks - ticksBeforeBurst;
+      p->mean_ticks = (((10 - rate) * p->mean_ticks) + (rate * p->last_ticks)) / 10;
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+      release(&p->lock);
+    }
+  }
+}
+
+struct proc * findLowestRunnableTimeProc() {
+  struct proc *p;
+  struct proc *lowestProc = 0;
+  int lowestTime = __INT32_MAX__;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->last_runnable_time < lowestTime && shouldProcRun(p)) {
+      lowestTime = p->last_runnable_time;
+      lowestProc = p;
+    }
+    release(&p->lock);
+  }
+  return lowestProc;
+}
+
+// fcfs scheduling
+void
+fcfsScheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+
+  c->proc = 0;
+  for(;;) {
+    intr_on();
+
+    p = findLowestRunnableTimeProc();
+    if(p) {
+      acquire(&p->lock);
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+      release(&p->lock);
+    }
+  }
+}
+
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns.  It loops, doing:
+//  - choose a process to run.
+//  - swtch to start running that process.
+//  - eventually that process transfers control
+//    via swtch back to the scheduler.
+void
+scheduler(void)
+{
+  // check SCHEDFLAG to determine which scheduler to use with IFNDEF
+  #ifdef DEFAULT
+  printf("DEFAULT SCHEDULER\n");
+  defaultScheduler();
+  #endif
+  #ifdef SJF
+  printf("SHORTEST JOB FIRST SCHEDULER\n");
+  sjfScheduler();
+  #endif
+  #ifdef FCFS
+  printf("FIRST COME FIRST SERVE SCHEDULER\n");
+  fcfsScheduler();
+  #endif
 }
 
 // Switch to scheduler.  Must hold only p->lock
@@ -506,7 +652,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
-  p->state = RUNNABLE;
+  makeRunnable(p);
   sched();
   release(&p->lock);
 }
@@ -574,7 +720,7 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        makeRunnable(p);
       }
       release(&p->lock);
     }
@@ -595,7 +741,7 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        p->state = RUNNABLE;
+        makeRunnable(p);
       }
       release(&p->lock);
       return 0;
@@ -666,19 +812,19 @@ procdump(void)
 
 
 //task 1
-int 
-kill_system(void)
+int
+kill_system()
 {
+  //maybe there's no need to kill the current process after all
   struct proc *currP = myproc();
   acquire(&currP->lock);
   struct proc *p;
   for(p = proc; p < &proc[NPROC]; p++){
-    if(p->pid != currP->pid && p->pid != INIT_PID && p->pid != SHELL_PID){
-      //or simply call kill system call on the process
+    if(p->pid != currP->pid && !isShellOrInitProcess(p)){
       acquire(&p->lock);
       p->killed = 1;
       if(p->state == SLEEPING){
-        p->state = RUNNABLE;
+        makeRunnable(p);
       }
       release(&p->lock);
     }
@@ -692,7 +838,17 @@ kill_system(void)
 int
 pause_system(int seconds)
 {
-  pause_time = ticks + seconds*10;  
+  struct proc *p;
+  ticksTimeout = ticks + (seconds * 10);
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state == RUNNING && !isShellOrInitProcess(p)){
+      makeRunnable(p);
+    }
+    release(&p->lock);
+  }
+
   yield();
   return 0;
 }
