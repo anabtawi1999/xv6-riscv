@@ -39,3 +39,4 @@ entry("uptime");
 #task 1
 entry("pause_system");
 entry("kill_system");
+entry("print_stats");

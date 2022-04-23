@@ -6,9 +6,24 @@
 #include "proc.h"
 #include "defs.h"
 
+
+void update_stats();
+int isShellOrInitProcess(struct proc *p);
+
 //task1
 #define INIT_PID 1
 #define SHELL_PID 2
+
+//task1
+uint ticksTimeout = 0;
+uint rate = 5;
+uint sleeping_proccesses_mean = 0;
+uint running_proccesses_mean = 0;
+uint runnable_procceses_mean = 0;
+uint num_of_proccesses = 0;
+uint program_time = 0;
+uint start_time = 0;
+uint cpu_utilization = 0;
 
 struct cpu cpus[NCPU];
 
@@ -18,10 +33,6 @@ struct proc *initproc;
 
 int nextpid = 1;
 struct spinlock pid_lock;
-
-//task1
-uint ticksTimeout = 0;
-uint rate = 5;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -38,6 +49,7 @@ struct spinlock wait_lock;
 void
 makeRunnable(struct proc *p) {
   p->last_runnable_time = ticks;
+  p->runnable_start = ticks;
   p->state = RUNNABLE;
 }
 
@@ -69,6 +81,7 @@ procinit(void)
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
   }
+  start_time = ticks;
 }
 
 // Must be called with interrupts disabled,
@@ -137,6 +150,13 @@ found:
   p->mean_ticks = 0;
   p->last_ticks = 0;
   p->last_runnable_time = ticks;
+  p->sleeping_time = 0;
+  p->runnable_time = 0;
+  p->running_time = 0;
+  p->sleep_start = 0;
+  p->runnable_start = 0;
+  p->running_start = 0;
+  num_of_proccesses++;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -387,6 +407,11 @@ exit(int status)
   wakeup(p->parent);
   
   acquire(&p->lock);
+  if (p->state == RUNNING) {
+    p->running_time += ticks - p->running_start;
+  }
+
+  update_stats(p);
 
   p->xstate = status;
   p->state = ZOMBIE;
@@ -447,6 +472,21 @@ wait(uint64 addr)
   }
 }
 
+void
+update_stats(struct proc * p)
+{
+  sleeping_proccesses_mean = (sleeping_proccesses_mean * (num_of_proccesses - 1) + p->sleeping_time) / (num_of_proccesses);
+  running_proccesses_mean = (running_proccesses_mean * (num_of_proccesses - 1) + p->running_time) / (num_of_proccesses);
+  runnable_procceses_mean = (runnable_procceses_mean * (num_of_proccesses - 1) + p->runnable_time) / (num_of_proccesses);
+  if (!isShellOrInitProcess(p)) { 
+    program_time += p->running_time;
+    cpu_utilization = (program_time*100) / (ticks - start_time);
+  }
+  // printf("updating stats....");
+  // printf("sleeping time - %d\n, Running time - %d\n Runnable time - %d\n", p->sleeping_time, p->running_time, p->runnable_time);
+}
+
+
 
 int isShellOrInitProcess(struct proc *p) {
   return (p->pid == 1 || p->pid == 2);
@@ -489,9 +529,12 @@ defaultScheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        p->runnable_time += ticks - p->runnable_start;
         p->state = RUNNING;
         c->proc = p;
+        p->running_start = ticks;
         swtch(&c->context, &p->context);
+        p->running_time += ticks - p->running_start;
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -531,14 +574,15 @@ sjfScheduler(void)
     p = findShortestProc();
     if(p) {
       acquire(&p->lock);
-      // Switch to chosen process.  It is the process's job
-      // to release its lock and then reacquire it
-      // before jumping back to us.
+      p->runnable_time += ticks - p->runnable_start;
       p->state = RUNNING;
       uint ticksBeforeBurst = ticks;
       c->proc = p;
+      p->running_start = ticks;
       swtch(&c->context, &p->context);
-
+      if (p->state != ZOMBIE) {
+        p->running_time += ticks - p->running_start;
+      }
       p->last_ticks = ticks - ticksBeforeBurst;
       p->mean_ticks = (((10 - rate) * p->mean_ticks) + (rate * p->last_ticks)) / 10;
 
@@ -582,10 +626,14 @@ fcfsScheduler(void)
       // Switch to chosen process.  It is the process's job
       // to release its lock and then reacquire it
       // before jumping back to us.
+      p->runnable_time += ticks - p->runnable_start;
       p->state = RUNNING;
       c->proc = p;
+      p->running_start = ticks;
       swtch(&c->context, &p->context);
-
+      if (p->state != ZOMBIE) {
+        p->running_time += ticks - p->running_start;
+      }
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
@@ -697,10 +745,11 @@ sleep(void *chan, struct spinlock *lk)
 
   // Go to sleep.
   p->chan = chan;
+  p->sleep_start = ticks;
   p->state = SLEEPING;
 
   sched();// returns only after the scheduler chooses him again that's why we acquire the lk again 
-
+  p->sleeping_time += ticks - p->sleep_start;
   // Tidy up.
   p->chan = 0;
 
@@ -838,17 +887,16 @@ kill_system()
 int
 pause_system(int seconds)
 {
-  struct proc *p;
   ticksTimeout = ticks + (seconds * 10);
-
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
-    if(p->state == RUNNING && !isShellOrInitProcess(p)){
-      makeRunnable(p);
-    }
-    release(&p->lock);
-  }
-
   yield();
+  return 0;
+}
+
+
+int
+print_stats()
+{
+  printf("Number of proccesses %d\n Program time: %d\n CPU utilization: %d\n Sleeping processes mean: %d\n Running processes mean: %d\n Runnable processes mean: %d\n",
+  num_of_proccesses ,program_time, cpu_utilization, sleeping_proccesses_mean, running_proccesses_mean, runnable_procceses_mean);
   return 0;
 }

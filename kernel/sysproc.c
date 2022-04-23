@@ -99,6 +99,12 @@ sys_kill_system(void)
   return kill_system();
 }
 
+uint64
+sys_print_stats(void)
+{
+  return print_stats();
+}
+
 // return how many clock tick interrupts have occurred
 // since start.
 uint64

@@ -95,6 +95,12 @@ struct proc {
   uint mean_ticks;
   uint last_ticks;
   uint last_runnable_time;
+  uint sleeping_time;          // Total time sleeping
+  uint running_time;           // Total time running
+  uint runnable_time;          // Total time runnable  
+  uint sleep_start;
+  uint running_start;
+  uint runnable_start;
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
