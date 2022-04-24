@@ -105,6 +105,12 @@ sys_print_stats(void)
   return print_stats();
 }
 
+uint64
+sys_get_utilization(void)
+{
+  return get_utilization();
+}
+
 // return how many clock tick interrupts have occurred
 // since start.
 uint64
